@@ -62,7 +62,6 @@ function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $Content
         throw "You must specify either source or destination"
     }
 
-
     $uri = Get-Uri -Path $Path -FromProject $FromProject -Source $Source -Destination $Destination -Collection $collection -Project $project
     Write-Host "[$Method] $uri"
 
@@ -104,27 +103,53 @@ function Copy-WorkItems($Ids) {
         return $workItems
     }
 
+    <#
+    function Create-Iterations($workItems) {
+        function Get-DestIterations {
+            $iterationsData = Invoke-TfsMethod "_apis/wit/classificationNodes/iterations?$('$')depth=2&api-version=1.0" -FromProject -Destination
+            return @($iterationsData.children.name)
+        }
+        function Get-SourceIterations {
+            $iterationsData = Invoke-TfsMethod "_apis/wit/classificationNodes/iterations?$('$')depth=2&api-version=1.0" -FromProject -Source
+            return @($iterationsData.children)
+        }
+
+        $expectedPaths = $workItems.fields."System.IterationPath" | sort -Unique
+        $existingDestPaths = Get-DestIterations
+        $existingSourcePaths = Get-SourceIterations
+        $expectedPaths | %{
+            if (!$existingPahts.Contains($_)) {
+
+            }
+        }
+    }
+    #>
+
     function Copy-WorkItem($Item) {
         function Get-FieldsOfInterest($Item) {
-            function Get-Field($Item, $fieldName) {
+            function Get-Field($Item, $fieldName, $fromOtherFieldName) {
+                if ($fromOtherFieldName) {
+                    return [PSCustomObject]@{"name"=$fieldName; "value"=$Item.fields.$fromOtherFieldName}
+                }
                 return [PSCustomObject]@{"name"=$fieldName; "value"=$Item.fields.$fieldName}
             }
             $fields = @()
             #$fields += Get-Field $Item 'System.Id'
-            $fields += Get-Field $Item 'System.AreaPath'
+            #$fields += Get-Field $Item 'System.AreaPath'
             #$fields += Get-Field $Item 'System.IterationPath'
             #$fields += Get-Field $Item 'System.WorkItemType'
             $fields += Get-Field $Item 'System.State'
             $fields += Get-Field $Item 'System.AssignedTo'
-            $fields += Get-Field $Item 'System.CreatedDate'
-            $fields += Get-Field $Item 'System.CreatedBy'
-            $fields += Get-Field $Item 'System.ChangedDate'
-            $fields += Get-Field $Item 'System.ChangedBy'
+            $fields += Get-Field $Item 'System.ChangedDate' 'System.CreatedDate'
+            $fields += Get-Field $Item 'System.ChangedBy' 'System.CreatedBy'
+            #$fields += Get-Field $Item 'System.ChangedDate'
+            #$fields += Get-Field $Item 'System.ChangedBy'
             $fields += Get-Field $Item 'System.Title'
             #$fields += Get-Field $Item 'System.BoardColumn'
             $fields += Get-Field $Item 'Microsoft.VSTS.Common.BacklogPriority'
-            $fields += Get-Field $Item 'Microsoft.VSTS.TCM.ReproSteps'
+            $fields += Get-Field $Item 'System.Description' 'Microsoft.VSTS.TCM.ReproSteps'
             $fields += Get-Field $Item 'System.Tags'
+            $fields = $fields | ?{ $_.value -ne $null }
             return $fields
         }
 
@@ -138,8 +163,47 @@ function Copy-WorkItems($Ids) {
 "@ 
         }
 
+        function Add-History($Item, $Id) {
+            if (!$Item.history) {
+                return
+            }
+            
+            $Item.history | %{
+                $date = $_.revisedDate
+                if ($date -eq "9999-01-01T00:00:00Z") {
+                    if (!$lastDate) {
+                        throw "Got a 9999-01-01T00:00:00Z date before any other date"
+                    }
+                    $date = [datetime]::Parse($lastDate).Add([timespan]::Parse("00:00:01")).ToString("yyyy-MM-ddTHH:mm:ss")
+                }
+                $lastDate = $date
+                $body = @"
+    [
+      {
+        "op": "add",
+        "path": "/fields/System.History",
+        "value": "$($_.value.Replace('\', '\\').Replace('"', '\"'))"
+      },
+      {
+        "op": "add",
+        "path": "/fields/System.ChangedBy",
+        "value": "$($_.revisedBy.name.Replace('\', '\\').Replace('"', '\"'))"
+      },
+      {
+        "op": "add",
+        "path": "/fields/System.ChangedDate",
+        "value": "$date"
+      }
+    ]
+"@
+                $encBody = [System.Text.Encoding]::UTF8.GetBytes($body)
+                $result = Invoke-TfsMethod "_apis/wit/workitems/$($Id)?bypassRules=true&api-version=1.0" -Method Patch -Body $encBody -ContentType "application/json-patch+json" -Destination
+                Write-Host "Added comment on work item $Id"
+            }
+        }
+
+
         $relations = $Item.relations
-        $history = $Item.history
 
         $body = @"
 [
@@ -150,12 +214,17 @@ function Copy-WorkItems($Ids) {
         $body += "`r`n]"
 
         $encBody = [System.Text.Encoding]::UTF8.GetBytes($body)
-        $path = "_apis/wit/workitems/$('$')$($Item.fields.'System.WorkItemType')?bypassRules=true"
+        #$type = "Product Backlog Item"
+        $type = $Item.fields.'System.WorkItemType'
+        $path = "_apis/wit/workitems/$('$')$($type)?bypassRules=true"
         $result = Invoke-TfsMethod -Path $path -FromProject -Method Patch -Body $encBody -ContentType "application/json-patch+json" -Destination
-
+        Write-Host "Created work item $($result.id) from work item $($Item.fields.'System.Id')"
+        Add-History $Item $result.id
     }
 
-    Get-WorkItems $Ids | %{
+    $workItems = Get-WorkItems $Ids
+    #Create-Iterations $workItems
+    $workItems | %{
         Copy-WorkItem $_
     }
 }
