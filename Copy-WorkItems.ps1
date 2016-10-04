@@ -1,7 +1,7 @@
 param(
     $SourceCollectionUrl = "http://localhost:8080/tfs/SSR",
     $SourceProject = "SSR Ritz",
-    $Wiql = "Select [System.Id], [System.Title] From WorkItems Where [Work Item Type] = 'Bug' And [State] <> 'Removed' And [State] <> 'Done' And [System.IterationPath] = 'SSR Ritz\Release 1\Buggar'")
+    $Wiql = "Select [System.Id] From WorkItems Where [Work Item Type] = 'Bug' And [State] in ('Committed','New','Reopened') And [System.IterationPath] = 'SSR Ritz\Release 1\Buggar'")
 
 $ErrorActionPreference = 'Stop'
 
@@ -13,18 +13,15 @@ function Get-Uri($Path, $ApiVersion = "api-version=1.0", $FromProject){
         $ApiVersion = "?$ApiVersion" 
     }
     if ($FromProject) {
-        return "$CollectionUrl/$SourceProject/$Path$ApiVersion";
+        return "$SourceCollectionUrl/$SourceProject/$Path$ApiVersion";
     }
-    return "$CollectionUrl/$Path$ApiVersion";
+    return "$SourceCollectionUrl/$Path$ApiVersion";
 }
 
 function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $ContentType, $Body) {
     if ($Method -ne "Get") {
         if (!$ContentType) {
             $ContentType = "application/json"
-        }
-        if ($Body) {
-            $Body = $Body.Replace('\','\\')
         }
     }
     $uri = Get-Uri -Path $Path -FromProject $FromProject
@@ -34,26 +31,85 @@ function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $Content
 
 function Get-WiqlIds() {
     return @(3342,3473,3468)
-    return Invoke-TfsMethod -Path "_apis/wit/wiql" -FromProject -Method Post -Body @"
+    $body = @"
     {
-      "query": "$Wiql"
+      "query": "$($Wiql.Replace('\','\\'))"
     }
-"@ | select -ExpandProperty workItems | select -ExpandProperty id
+"@
+    return @(Invoke-TfsMethod -Path "_apis/wit/wiql" -FromProject -Method Post -Body $body | select -ExpandProperty workItems | select -ExpandProperty id)
 }
 
 function Copy-WorkItems($Ids) {
     function Get-WorkItems($Ids) {
+        function Get-WorkItemHistory($Item) {
+            if ([string]::IsNullOrEmpty($Item.fields."System.History")) {
+                return @()
+            }
+            return @(Invoke-TfsMethod "_apis/wit/workItems/$($Item.id)/history" | select -ExpandProperty value)
+        }
+
+        if (!$Ids) {
+            throw "Found no work items"
+        }
         if ($Ids.Length -gt 200) {
             throw "Got more than 200 ids" #TODO: Handle more than 200
         }
-        return Invoke-TfsMethod -Path "_apis/wit/WorkItems?ids=$([string]::Join(',',$Ids))&$('$expand=all')" | select -ExpandProperty value
+        $workItems = @(Invoke-TfsMethod -Path "_apis/wit/WorkItems?ids=$([string]::Join(',',$Ids))&$('$expand=all')" | select -ExpandProperty value)
+        $workItems | %{
+            $_ | Add-Member history (Get-WorkItemHistory $_)
+        }
+        return $workItems
     }
 
     function Copy-WorkItem($Item) {
-        $id = $Item.id
-        $fields = $Item.fields
+        function Get-FieldsOfInterest($Item) {
+            function Get-Field($Item, $fieldName) {
+                return [PSCustomObject]@{"name"=$fieldName; "value"=$Item.fields.$fieldName}
+            }
+            $fields = @()
+            #$fields += Get-Field $Item 'System.Id'
+            $fields += Get-Field $Item 'System.AreaPath'
+            #$fields += Get-Field $Item 'System.IterationPath'
+            #$fields += Get-Field $Item 'System.WorkItemType'
+            $fields += Get-Field $Item 'System.State'
+            $fields += Get-Field $Item 'System.AssignedTo'
+            $fields += Get-Field $Item 'System.CreatedDate'
+            $fields += Get-Field $Item 'System.CreatedBy'
+            $fields += Get-Field $Item 'System.ChangedDate'
+            $fields += Get-Field $Item 'System.ChangedBy'
+            $fields += Get-Field $Item 'System.Title'
+            $fields += Get-Field $Item 'System.BoardColumn'
+            $fields += Get-Field $Item 'Microsoft.VSTS.Common.BacklogPriority'
+            $fields += Get-Field $Item 'Microsoft.VSTS.TCM.ReproSteps'
+            $fields += Get-Field $Item 'System.Tags'
+            return $fields
+        }
+
+        function Render-Field($Field) {
+            return @"
+  {
+    "op": "add",
+    "path": "/fields/$($Field.name)",
+    "value": "$($Field.value.ToString().Replace('\', '\\').Replace('"', '\"'))"
+  }
+"@ 
+        }
+
         $relations = $Item.relations
-        $history = @(Invoke-TfsMethod "_apis/wit/workItems/$id/history" | select -ExpandProperty value)
+        $history = $Item.history
+
+        $body = @"
+[
+
+"@
+
+        $body += [string]::Join(",`r`n", (Get-FieldsOfInterest $Item | %{ Render-Field $_ }))
+        $body += "`r`n]"
+
+        $encBody = [System.Text.Encoding]::UTF8.GetBytes($body)
+        $path = "_apis/wit/workitems/$('$')$($Item.fields.'System.WorkItemType')?bypassRules=true"
+        #$result = Invoke-TfsMethod -Path $path -FromProject -Method Patch -Body $encBody -ContentType "application/json-patch+json"
+
     }
 
     Get-WorkItems $Ids | %{
