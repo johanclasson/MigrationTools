@@ -63,7 +63,7 @@ function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $Content
     }
 
     $uri = Get-Uri -Path $Path -FromProject $FromProject -Source $Source -Destination $Destination -Collection $collection -Project $project
-    Write-Host "[$Method] $uri"
+    Write-Verbose "[$Method] $uri"
 
     if ($Source) {
         return Invoke-RestMethod -Uri $uri -Method $Method -UseBasicParsing -Credential $credential -ContentType $ContentType -Body $Body
@@ -72,7 +72,7 @@ function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $Content
 }
 
 function Get-WiqlIds() {
-    return @(3342,3473,3468)
+    #return @(3342,3473,3468)
     $body = @"
     {
       "query": "$($Wiql.Replace('\','\\'))"
@@ -128,10 +128,18 @@ function Copy-WorkItems($Ids) {
     function Copy-WorkItem($Item) {
         function Get-FieldsOfInterest($Item) {
             function Get-Field($Item, $fieldName, $fromOtherFieldName) {
+                
                 if ($fromOtherFieldName) {
-                    return [PSCustomObject]@{"name"=$fieldName; "value"=$Item.fields.$fromOtherFieldName}
+                    $value = $Item.fields.$fromOtherFieldName
                 }
-                return [PSCustomObject]@{"name"=$fieldName; "value"=$Item.fields.$fieldName}
+                else {
+                    $value = $Item.fields.$fieldName
+                }
+                if ($value.length -gt 1000000) {
+                    Write-Warning "Field $fieldName of work item $($Item.id) was to large! Cropping content..."
+                    $value = $value.Substring(0, 1000000)
+                }
+                return [PSCustomObject]@{"name"=$fieldName; "value"=$value}
             }
             $fields = @()
             #$fields += Get-Field $Item 'System.Id'
@@ -171,8 +179,9 @@ function Copy-WorkItems($Ids) {
             $Item.history | %{
                 $date = $_.revisedDate
                 if ($date -eq "9999-01-01T00:00:00Z") {
+                    Write-Warning "Got an unexpected date $date for work item $Id"
                     if (!$lastDate) {
-                        throw "Got a 9999-01-01T00:00:00Z date before any other date"
+                        $lastDate = "2016-01-01T00:00:00Z"
                     }
                     $date = [datetime]::Parse($lastDate).Add([timespan]::Parse("00:00:01")).ToString("yyyy-MM-ddTHH:mm:ss")
                 }
