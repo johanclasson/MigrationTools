@@ -1,11 +1,36 @@
+[cmdletbinding()]
 param(
     $SourceCollectionUrl = "http://localhost:8080/tfs/SSR",
     $SourceProject = "SSR Ritz",
-    $Wiql = "Select [System.Id] From WorkItems Where [Work Item Type] = 'Bug' And [State] in ('Committed','New','Reopened') And [System.IterationPath] = 'SSR Ritz\Release 1\Buggar'")
+    $Wiql = "Select [System.Id] From WorkItems Where [Work Item Type] = 'Bug' And [State] in ('Committed','New','Reopened') And [System.IterationPath] = 'SSR Ritz\Release 1\Buggar'",
+    $DestCollectionUrl = "https://nethouse-solutions.visualstudio.com",
+    $DestProject = "JohansDev"
+)
+
+if (!$SourceCredential) {
+    throw 'You must specify $SourceCredential outside of this script'
+}
+if (!$DestUsername) {
+    throw 'You must specify $DestUsername outside of this script'
+}
+if (!$DestPassword) {
+    throw 'You must specify $DestPassword outside of this script'
+}
 
 $ErrorActionPreference = 'Stop'
 
-function Get-Uri($Path, $ApiVersion = "api-version=1.0", $FromProject){
+function Get-Headers($Username, $Password) {
+    $pair = "$($Username):$($Password)"
+    $encodedCreds = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
+    $basicAuthValue = "Basic $encodedCreds"
+    return @{
+        Authorization = $basicAuthValue
+    }
+}
+
+$destHeaders = Get-Headers -Username $DestUsername -Password $DestPassword
+
+function Get-Uri($Path, $ApiVersion = "api-version=1.0", $FromProject, $Source, $Destination, $Collection, $Project){
     if ($Path.Contains('?')) {
         $ApiVersion = "&$ApiVersion" 
     }
@@ -13,20 +38,38 @@ function Get-Uri($Path, $ApiVersion = "api-version=1.0", $FromProject){
         $ApiVersion = "?$ApiVersion" 
     }
     if ($FromProject) {
-        return "$SourceCollectionUrl/$SourceProject/$Path$ApiVersion";
+        return "$Collection/$Project/$Path$ApiVersion";
     }
-    return "$SourceCollectionUrl/$Path$ApiVersion";
+    return "$Collection/$Path$ApiVersion";
 }
 
-function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $ContentType, $Body) {
+function Invoke-TfsMethod($Path, [switch]$FromProject, $Method = "Get", $ContentType, $Body, [switch]$Source, [switch]$Destination) {
     if ($Method -ne "Get") {
         if (!$ContentType) {
             $ContentType = "application/json"
         }
     }
-    $uri = Get-Uri -Path $Path -FromProject $FromProject
+    if ($Source) {
+        $collection = $SourceCollectionUrl
+        $project = $SourceProject
+        $credential = $SourceCredential
+    }
+    elseif ($Destination) {
+        $collection = $DestCollectionUrl
+        $project = $DestProject
+    }
+    else {
+        throw "You must specify either source or destination"
+    }
+
+
+    $uri = Get-Uri -Path $Path -FromProject $FromProject -Source $Source -Destination $Destination -Collection $collection -Project $project
     Write-Host "[$Method] $uri"
-    return Invoke-RestMethod -Uri $uri -Method $Method -UseBasicParsing -Credential $c -ContentType $ContentType -Body $Body
+
+    if ($Source) {
+        return Invoke-RestMethod -Uri $uri -Method $Method -UseBasicParsing -Credential $credential -ContentType $ContentType -Body $Body
+    }
+    return Invoke-RestMethod -Uri $uri -Method $Method -UseBasicParsing -Headers $destHeaders -ContentType $ContentType -Body $Body
 }
 
 function Get-WiqlIds() {
@@ -36,7 +79,7 @@ function Get-WiqlIds() {
       "query": "$($Wiql.Replace('\','\\'))"
     }
 "@
-    return @(Invoke-TfsMethod -Path "_apis/wit/wiql" -FromProject -Method Post -Body $body | select -ExpandProperty workItems | select -ExpandProperty id)
+    return @(Invoke-TfsMethod -Path "_apis/wit/wiql" -FromProject -Method Post -Body $body -Source | select -ExpandProperty workItems | select -ExpandProperty id)
 }
 
 function Copy-WorkItems($Ids) {
@@ -45,7 +88,7 @@ function Copy-WorkItems($Ids) {
             if ([string]::IsNullOrEmpty($Item.fields."System.History")) {
                 return @()
             }
-            return @(Invoke-TfsMethod "_apis/wit/workItems/$($Item.id)/history" | select -ExpandProperty value)
+            return @(Invoke-TfsMethod "_apis/wit/workItems/$($Item.id)/history" -Source | select -ExpandProperty value)
         }
 
         if (!$Ids) {
@@ -54,7 +97,7 @@ function Copy-WorkItems($Ids) {
         if ($Ids.Length -gt 200) {
             throw "Got more than 200 ids" #TODO: Handle more than 200
         }
-        $workItems = @(Invoke-TfsMethod -Path "_apis/wit/WorkItems?ids=$([string]::Join(',',$Ids))&$('$expand=all')" | select -ExpandProperty value)
+        $workItems = @(Invoke-TfsMethod -Path "_apis/wit/WorkItems?ids=$([string]::Join(',',$Ids))&$('$expand=all')" -Source | select -ExpandProperty value)
         $workItems | %{
             $_ | Add-Member history (Get-WorkItemHistory $_)
         }
@@ -78,7 +121,7 @@ function Copy-WorkItems($Ids) {
             $fields += Get-Field $Item 'System.ChangedDate'
             $fields += Get-Field $Item 'System.ChangedBy'
             $fields += Get-Field $Item 'System.Title'
-            $fields += Get-Field $Item 'System.BoardColumn'
+            #$fields += Get-Field $Item 'System.BoardColumn'
             $fields += Get-Field $Item 'Microsoft.VSTS.Common.BacklogPriority'
             $fields += Get-Field $Item 'Microsoft.VSTS.TCM.ReproSteps'
             $fields += Get-Field $Item 'System.Tags'
@@ -108,7 +151,7 @@ function Copy-WorkItems($Ids) {
 
         $encBody = [System.Text.Encoding]::UTF8.GetBytes($body)
         $path = "_apis/wit/workitems/$('$')$($Item.fields.'System.WorkItemType')?bypassRules=true"
-        #$result = Invoke-TfsMethod -Path $path -FromProject -Method Patch -Body $encBody -ContentType "application/json-patch+json"
+        $result = Invoke-TfsMethod -Path $path -FromProject -Method Patch -Body $encBody -ContentType "application/json-patch+json" -Destination
 
     }
 
