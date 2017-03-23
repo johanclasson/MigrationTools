@@ -197,7 +197,7 @@ function Add-WorkItem($Issue, $IterationPath) {
 }
 
 function Add-CommentOnWorkItem($Id, $Comment) {
-    $url = "https://nethouse-solutions.visualstudio.com/_apis/wit/workitems/$($id)?bypassRules=true&api-version=1.0"
+    $url = "$TfsCollectionUrl/$TfsProject/_apis/wit/workitems/$($id)?bypassRules=true&api-version=1.0"
     $description = Convert-Markdown $comment.body
     $body = @"
 [
