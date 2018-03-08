@@ -6,10 +6,13 @@ param(
     $TfsCollectionUrl,
     $TfsProject,
     $TfsUsername,
-    $TfsPersonalAccessToken
+    $TfsPersonalAccessToken,
+    $WorkItemTypeName = "Product Backlog Item"
 )
 
 $ErrorActionPreference = "stop"
+
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 $TfsCollectionUrl = $TfsCollectionUrl.TrimEnd('/')
 
@@ -119,7 +122,7 @@ function Convert-Markdown($Text) {
 }
 
 function Add-WorkItem($Issue, $IterationPath) {
-    $url = "$TfsCollectionUrl/$TfsProject/_apis/wit/workitems/$('$Product') Backlog Item?bypassRules=true&api-version=1.0"
+    $url = "$TfsCollectionUrl/$TfsProject/_apis/wit/workitems/$('$' + $WorkItemTypeName)?bypassRules=true&api-version=1.0"
     $state = "New"
     if ($Issue.state -eq "Closed") {
         $state = "Done"
@@ -197,7 +200,7 @@ function Add-WorkItem($Issue, $IterationPath) {
 }
 
 function Add-CommentOnWorkItem($Id, $Comment) {
-    $url = "$TfsCollectionUrl/$TfsProject/_apis/wit/workitems/$($id)?bypassRules=true&api-version=1.0"
+    $url = "$TfsCollectionUrl/_apis/wit/workitems/$($id)?bypassRules=true&api-version=1.0"
     $description = Convert-Markdown $comment.body
     $body = @"
 [

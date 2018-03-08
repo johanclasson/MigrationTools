@@ -15,17 +15,17 @@ The following data is copied from milestones to iterations:
 
 The following data is copied from issues to work items:
 
-| Issue          | Work Item          | Comment                                    |
-| -------------- | ------------------ | ------------------------------------------ |
-| Title          | Title              |                                            |
-| Body           | Descripion         | Markdown is converted into HTML            |
-| State          | State              |                                            |
-| Lables         | Tags               |                                            |
-| Milestone name | Iteration Path     |                                            |
-| Url            | Hyperlink          | For historical purpose                     |
-| User Login     | Created/Changed By | User do not need to be present in TFS/VSTS |
-| Assignee Login | Assigned To        | User do not need to be present in TFS/VSTS |
-| Comment Bodies | History Descripion | Markdown is converted into HTML            |
+| Issue          | Work Item           | Comment                                    |
+| -------------- | ------------------- | ------------------------------------------ |
+| Title          | Title               |                                            |
+| Body           | Description         | Markdown is converted into HTML            |
+| State          | State               |                                            |
+| Labels         | Tags                |                                            |
+| Milestone name | Iteration Path      |                                            |
+| Url            | Hyperlink           | For historical purpose                     |
+| User Login     | Created/Changed By  | User do not need to be present in TFS/VSTS |
+| Assignee Login | Assigned To         | User do not need to be present in TFS/VSTS |
+| Comment Bodies | History Description | Markdown is converted into HTML            |
 
 Example of how to invoke:
 
@@ -45,3 +45,4 @@ Example of how to invoke:
 * You need to be a member of the TFS "Project Collection Service Accounts" group to be allowed to use the `bypassRules` query parameter.
 * I used basic authentication to login on GitHub. If you have an account with activated two factor authentication that method will not work for you.
 * Only milestones that have issues relating to them are migrated. Empty milestones are not included.
+* The script defaults to create PBIs, but you can set which type of work item to create with the `WorkItemTypeName`-parameter.
